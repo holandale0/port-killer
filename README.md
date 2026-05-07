@@ -5,15 +5,15 @@ Utilitário desktop para **verificar e encerrar processos** que estão ocupando 
 Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção de processos e conexões em tempo real.
 
 <p align="center">
-  <a href="https://github.com/holandale0/port-killer/releases/download/v1.0.0/PortKiller_Setup_1.0.0.exe">
+  <a href="https://github.com/holandale0/port-killer/releases/download/1.0.0/PortKiller_Setup_1.0.0.exe">
     <img src="https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows"/>
   </a>
   &nbsp;
-  <a href="https://github.com/holandale0/port-killer/releases/download/v1.0.0/PortKiller-1.0.0-x86_64.AppImage">
+  <a href="https://github.com/holandale0/port-killer/releases/download/1.0.0/PortKiller-1.0.0-x86_64.AppImage">
     <img src="https://img.shields.io/badge/Download-Linux-E95420?style=for-the-badge&logo=linux&logoColor=white" alt="Download Linux"/>
   </a>
   &nbsp;
-  <a href="https://github.com/holandale0/port-killer/releases/download/v1.0.0/PortKiller-1.0.0.dmg">
+  <a href="https://github.com/holandale0/port-killer/releases/download/1.0.0/PortKiller-1.0.0.dmg">
     <img src="https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS"/>
   </a>
 </p>
