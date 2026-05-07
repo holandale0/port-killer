@@ -1,0 +1,35 @@
+# Claude
+.claude/
+
+# PyInstaller build artifacts
+build/
+dist/
+
+# Inno Setup output
+installer/windows/Output/
+
+# AppImage staging directory (generated during build)
+installer/linux/AppDir/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
