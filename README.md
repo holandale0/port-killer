@@ -16,6 +16,10 @@ Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção d
   <a href="https://github.com/holandale0/port-killer/releases/download/1.0.0/PortKiller-1.0.0.dmg">
     <img src="https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS"/>
   </a>
+  &nbsp;
+  <a href="https://github.com/holandale0/port-killer/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License MIT"/>
+  </a>
 </p>
 
 ---
