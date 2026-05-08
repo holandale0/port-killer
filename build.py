@@ -19,6 +19,7 @@ import subprocess
 import shutil
 import platform
 import argparse
+import venv
 
 APP_NAME = "PortKiller"
 APP_VERSION = "1.0.0"
@@ -30,9 +31,33 @@ INNO_SETUP_PATHS = [
 ]
 
 
+VENV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".build-venv")
+
+
 def run(cmd, **kwargs):
     print(f"\n>>> {' '.join(str(c) for c in cmd)}")
     subprocess.run(cmd, check=True, **kwargs)
+
+
+def ensure_venv():
+    """
+    On Linux/macOS with PEP 668 (Ubuntu 23.04+, Debian 12+), pip refuses to
+    install system-wide. Automatically create an isolated venv and re-run this
+    script inside it so the rest of the build works without --break-system-packages.
+    """
+    if sys.prefix != sys.base_prefix:
+        return  # already inside a venv, nothing to do
+
+    if not sys.platform.startswith("linux") and sys.platform != "darwin":
+        return  # Windows handles this differently
+
+    print("Detected externally-managed Python. Creating build venv at .build-venv ...")
+    venv.create(VENV_DIR, with_pip=True, clear=False)
+
+    python = os.path.join(VENV_DIR, "bin", "python3")
+    print(f"Re-launching build inside venv: {python}\n")
+    result = subprocess.run([python, os.path.abspath(__file__)] + sys.argv[1:])
+    sys.exit(result.returncode)
 
 
 def clean():
@@ -151,6 +176,8 @@ def main():
     if args.clean:
         clean()
         return
+
+    ensure_venv()  # no-op on Windows or when already inside a venv
 
     print(f"Building Port Killer v{APP_VERSION} on {sys.platform} ({platform.machine()})")
     print("=" * 60)
