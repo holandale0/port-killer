@@ -31,8 +31,14 @@ Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção d
 ## ✨ Funcionalidades
 
 - Verifica qual processo está usando uma porta específica (1–65535)
-- Exibe **PID**, **nome do processo** e **status da conexão** em tempo real
-- Encerra o processo diretamente pela interface, com diálogo de confirmação
+- Exibe **PID**, **nome do processo**, **status** e **quantidade de processos filhos** em tempo real
+- **Lista de portas pinadas** — persiste entre sessões (salvo em arquivo JSON local)
+- **Auto-refresh** da lista a cada 4 segundos
+- Status detalhado por porta: `EM USO`, `LIVRE`, `DORMINDO`, `PARADO`, `ZUMBI`, `AGUARD. E/S`
+- Encerra processo individual via botão ou duplo clique na lista
+- **Encerrar selecionadas** — selecione múltiplas portas (Ctrl/Shift+clique) e mate de uma vez
+- **Encerrar todas** — encerra todos os processos ativos da lista com um clique
+- Confirmação obrigatória nas ações em massa; senha sudo nas ações em massa no Linux/macOS
 - Interface **dark mode** com tema [Catppuccin Mocha](https://github.com/catppuccin/catppuccin)
 - Distribuído como executável standalone — **sem precisar instalar Python**
 
@@ -98,8 +104,16 @@ Resultado por plataforma:
 ## ✅ Checklist
 
 - [x] Verificação de porta em tempo real
-- [x] Exibição de PID, nome e status do processo
-- [x] Encerramento de processo com confirmação
+- [x] Exibição de PID, nome, status e processos filhos
+- [x] Encerramento de processo individual com confirmação
+- [x] Lista de portas pinadas com persistência entre sessões
+- [x] Auto-refresh da lista a cada 4 segundos
+- [x] Status detalhado: EM USO, LIVRE, DORMINDO, PARADO, ZUMBI etc.
+- [x] Encerrar processo por duplo clique na lista
+- [x] Encerrar processos selecionados (multi-seleção)
+- [x] Encerrar todos os processos da lista
+- [x] Dialog de confirmação com senha sudo (Linux/macOS)
+- [x] Limpar lista pinada
 - [x] Interface dark mode (Catppuccin Mocha)
 - [x] Instalador Windows com wizard (Inno Setup)
 - [x] AppImage para Linux
