@@ -20,11 +20,9 @@ Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção d
 
 ---
 
-## 📸 Screenshots
+## 📸 Screenshot
 
-| Porta livre | Porta em uso |
-|:-----------:|:------------:|
-| ![Porta livre](captures/free.png) | ![Porta em uso](captures/in_use.png) |
+![Port Killer](captures/screenshot.png)
 
 ---
 
