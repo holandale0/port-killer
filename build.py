@@ -51,10 +51,24 @@ def ensure_venv():
     if not sys.platform.startswith("linux") and sys.platform != "darwin":
         return  # Windows handles this differently
 
-    print("Detected externally-managed Python. Creating build venv at .build-venv ...")
-    venv.create(VENV_DIR, with_pip=True, clear=False)
+    # ensurepip is required to create a functional venv.
+    # On Ubuntu/Debian it ships in a separate package (python3.x-venv).
+    try:
+        import ensurepip  # noqa: F401
+    except ImportError:
+        ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+        pkg = f"python{ver}-venv"
+        print(f"ensurepip not available. Installing {pkg} via apt ...")
+        subprocess.run(["sudo", "apt", "install", "-y", pkg], check=True)
+
+    print("Creating build venv at .build-venv ...")
+    venv.create(VENV_DIR, with_pip=True, clear=True)
 
     python = os.path.join(VENV_DIR, "bin", "python3")
+    if not os.path.exists(python):
+        print(f"ERROR: venv Python not found at {python}. Aborting.")
+        sys.exit(1)
+
     print(f"Re-launching build inside venv: {python}\n")
     result = subprocess.run([python, os.path.abspath(__file__)] + sys.argv[1:])
     sys.exit(result.returncode)
