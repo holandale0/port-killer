@@ -126,6 +126,12 @@ Resultado por plataforma:
 
 ---
 
+## ⚠️ Permissões
+
+Em alguns sistemas pode ser necessário executar como **Administrador** (Windows) ou com **sudo** (Linux/macOS) para visualizar processos de sistema ou encerrar processos privilegiados.
+
+---
+
 ## ✅ Checklist
 
 - [x] Verificação de porta em tempo real
@@ -144,9 +150,3 @@ Resultado por plataforma:
 - [x] AppImage para Linux
 - [x] DMG para macOS
 - [x] Script de build automatizado (`build.py`)
-
----
-
-## ⚠️ Permissões
-
-Em alguns sistemas pode ser necessário executar como **Administrador** (Windows) ou com **sudo** (Linux/macOS) para visualizar processos de sistema ou encerrar processos privilegiados.
