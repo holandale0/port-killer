@@ -33,13 +33,13 @@ Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção d
 ## ✨ Funcionalidades
 
 - Verifica qual processo está usando uma porta específica (1–65535)
-- Exibe **PID**, **nome do processo**, **status** e **quantidade de processos filhos** em tempo real
+- Exibe **PID**, **nome do processo**, **status**, **tipo de processo** e **quantidade de processos filhos** em tempo real
+- **Tipo de processo** identificado automaticamente: `Sistema`, `Aplicação` ou `Desconhecido`
 - **Lista de portas pinadas** — persiste entre sessões (salvo em arquivo JSON local)
 - **Auto-refresh** da lista a cada 4 segundos
 - Status detalhado por porta: `EM USO`, `LIVRE`, `DORMINDO`, `PARADO`, `ZUMBI`, `AGUARD. E/S`
 - Encerra processo individual via botão ou duplo clique na lista
-- **Encerrar selecionadas** — selecione múltiplas portas (Ctrl/Shift+clique) e mate de uma vez
-- **Encerrar todas** — encerra todos os processos ativos da lista com um clique
+- **Encerrar todas** — encerra de uma vez todos os processos com status diferente de `LIVRE`
 - Confirmação obrigatória nas ações em massa; senha sudo nas ações em massa no Linux/macOS
 - Interface **dark mode** com tema [Catppuccin Mocha](https://github.com/catppuccin/catppuccin)
 - Distribuído como executável standalone — **sem precisar instalar Python**
@@ -140,13 +140,13 @@ Em alguns sistemas pode ser necessário executar como **Administrador** (Windows
 
 - [x] Verificação de porta em tempo real
 - [x] Exibição de PID, nome, status e processos filhos
+- [x] Identificação do tipo de processo (Sistema, Aplicação, Desconhecido)
 - [x] Encerramento de processo individual com confirmação
 - [x] Lista de portas pinadas com persistência entre sessões
 - [x] Auto-refresh da lista a cada 4 segundos
 - [x] Status detalhado: EM USO, LIVRE, DORMINDO, PARADO, ZUMBI etc.
 - [x] Encerrar processo por duplo clique na lista
-- [x] Encerrar processos selecionados (multi-seleção)
-- [x] Encerrar todos os processos da lista
+- [x] Encerrar todas as portas com status diferente de LIVRE
 - [x] Dialog de confirmação com senha sudo (Linux/macOS)
 - [x] Limpar lista pinada
 - [x] Interface dark mode (Catppuccin Mocha)
