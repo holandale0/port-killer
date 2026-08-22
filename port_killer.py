@@ -3,10 +3,20 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import psutil
 import sys
-import time
 import json
 import os
 import subprocess
+from collections import namedtuple
+
+# Single source of truth for the version: build.py, port_killer.spec and
+# setup.iss all read it from here instead of each carrying a copy.
+APP_VERSION = "1.0.0"
+
+
+def resource_path(name):
+    """Locate a bundled data file, both frozen (PyInstaller) and from source."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
 
 COLORS = {
     "bg":                 "#1e1e2e",
@@ -51,6 +61,16 @@ _SYSTEM_NAMES_WIN = frozenset({
     "dwm.exe", "fontdrvhost.exe", "lsm.exe", "ntoskrnl.exe",
 })
 
+# A kill target, resolved at the moment the user asks for it. `create_time`
+# pins the identity of the process: a PID alone is not a stable handle, and
+# the OS may hand it to something else while the confirmation dialog is open.
+Target = namedtuple("Target", "port pid name create_time children")
+
+# What a port check found. `pids` holds every process bound to the port —
+# SO_REUSEPORT (nginx/node cluster) and dual-stack listeners put more than one
+# there, and killing only the first leaves the port occupied.
+PortInfo = namedtuple("PortInfo", "pid name status children proc_type pids")
+
 _SYSTEM_NAMES_UNIX = frozenset({
     "systemd", "init", "launchd", "kthreadd", "udevd", "NetworkManager",
     "sshd", "cron", "rsyslogd", "dbus-daemon", "cupsd", "avahi-daemon",
@@ -65,18 +85,57 @@ def _pins_path():
     return os.path.join(base, ".port_killer_pins.json")
 
 def load_pins():
+    """
+    Reads the pinned ports.
+
+    Returns (pins, writable). `writable` is False when the file exists but
+    could not be read — saving over it would destroy pins we never saw, so
+    the caller must refuse to write until the user acts.
+
+    A single malformed entry is skipped rather than discarding the whole
+    list, and unparseable JSON is moved aside to <file>.corrupt instead of
+    being silently overwritten on the next save.
+    """
+    path = _pins_path()
+    if not os.path.exists(path):
+        return [], True
+
     try:
-        with open(_pins_path()) as f:
-            return sorted(set(json.load(f).get("pins", [])))
-    except Exception:
-        return []
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except ValueError:
+        try:
+            os.replace(path, path + ".corrupt")
+        except OSError:
+            return [], False
+        return [], True
+    except OSError:
+        return [], False
+
+    entries = raw.get("pins") if isinstance(raw, dict) else None
+    pins = set()
+    for item in entries or []:
+        try:
+            port = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= port <= 65535:
+            pins.add(port)
+    return sorted(pins), True
 
 def save_pins(pins):
+    """Atomic write — a crash mid-save can no longer truncate the pin list."""
+    path = _pins_path()
+    tmp = path + ".tmp"
     try:
-        with open(_pins_path(), "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"pins": sorted(set(pins))}, f)
-    except Exception:
-        pass
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 # ── System helpers ────────────────────────────────────────────────────────────
@@ -91,61 +150,122 @@ def is_admin():
     return os.getuid() == 0
 
 
-def get_process_type(pid, name):
-    """Classify process as 'Sistema', 'Aplicação', or 'Desconhecido'."""
+def system_snapshot():
+    """
+    One pass over the whole system, shared by every port in a refresh.
+
+    Enumerating connections and the process tree once per port made refresh
+    cost grow linearly with the number of pins (measured: 470 ms for 10 pins,
+    blocking the Tk main thread every 4 s).
+
+    Returns (ports, child_counts) where `ports` maps a local port to the list
+    of connections on it, or is the "ACCESS_DENIED" sentinel.
+    """
+    try:
+        connections = psutil.net_connections(kind="inet")
+    except (psutil.AccessDenied, OSError, RuntimeError):
+        return "ACCESS_DENIED", {}
+
+    ports = {}
+    for conn in connections:
+        if conn.laddr:
+            ports.setdefault(conn.laddr.port, []).append(conn)
+
+    # A listening socket is what actually holds a port. Most connections are
+    # not listeners (322 of 434 on a normal desktop), so taking whichever came
+    # first could describe the port by an unrelated ESTABLISHED socket — or by
+    # some other process whose ephemeral local port happened to collide.
+    for port, conns in ports.items():
+        listening = [c for c in conns if c.status == psutil.CONN_LISTEN]
+        if listening:
+            ports[port] = listening
+
+    # psutil._ppid_map() is the same bulk syscall Process.children() uses, but
+    # paid once instead of once per port. Private API, so degrade gracefully.
+    child_counts = {}
+    ppid_map = getattr(psutil, "_ppid_map", None)
+    if ppid_map is not None:
+        try:
+            for ppid in ppid_map().values():
+                child_counts[ppid] = child_counts.get(ppid, 0) + 1
+        except Exception:
+            child_counts = {}
+    return ports, child_counts
+
+
+def get_process_type(pid, name, proc=None):
+    """
+    Classify process as 'Sistema', 'Aplicação', or 'Desconhecido'.
+
+    Unreadable ownership means 'Desconhecido', never 'Aplicação'. On Windows
+    an AccessDenied from username() is precisely what a privileged process
+    looks like to an unelevated caller, so the old fallback pinned the
+    safest-looking label onto the least safe processes: services such as
+    oracle.exe, tnslsnr.exe and postgres.exe all read as ordinary
+    applications. This is the label the user leans on before killing, so it
+    has to fail closed — as the POSIX branch already did.
+    """
     if not pid:
         return "Desconhecido"
+
+    # Checked first: it needs no syscall, and it still answers for processes
+    # whose owner we are not allowed to read.
+    if sys.platform == "win32":
+        if name.lower() in _SYSTEM_NAMES_WIN:
+            return "Sistema"
+    elif name in _SYSTEM_NAMES_UNIX:
+        return "Sistema"
+
     try:
-        p = psutil.Process(pid)
-        if sys.platform == "win32":
-            try:
-                uname = (p.username() or "").upper()
-                if any(s in uname for s in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE")):
-                    return "Sistema"
-            except (psutil.AccessDenied, psutil.NoSuchProcess):
-                pass
-            if name.lower() in _SYSTEM_NAMES_WIN:
-                return "Sistema"
-            return "Aplicação"
-        else:
-            try:
-                uname = p.username() or ""
-            except (psutil.AccessDenied, psutil.NoSuchProcess):
-                return "Desconhecido"
-            if uname == "root" or name in _SYSTEM_NAMES_UNIX:
-                return "Sistema"
-            return "Aplicação"
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        uname = (proc or psutil.Process(pid)).username() or ""
+    except (psutil.Error, OSError):
         return "Desconhecido"
 
+    if sys.platform == "win32":
+        if any(s in uname.upper() for s in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE")):
+            return "Sistema"
+    elif uname == "root":
+        return "Sistema"
+    return "Aplicação"
 
-def get_port_info(port):
+
+def get_port_info(port, snapshot=None):
     """
     Returns:
       None             — port is free
       "ACCESS_DENIED"  — no permission
-      (pid, name, status_label, child_count, proc_type) — port in use
+      PortInfo         — port in use
+
+    Pass `snapshot` (from system_snapshot()) to check many ports without
+    re-scanning the system for each one.
     """
-    try:
-        connections = psutil.net_connections(kind="inet")
-    except psutil.AccessDenied:
+    ports, child_counts = snapshot if snapshot is not None else system_snapshot()
+    if ports == "ACCESS_DENIED":
         return "ACCESS_DENIED"
 
-    for conn in connections:
-        if conn.laddr and conn.laddr.port == port:
-            pid = conn.pid
-            name, status_label, child_count = "—", "EM USO", 0
-            if pid:
-                try:
-                    p = psutil.Process(pid)
-                    name = p.name()
-                    status_label = STATUS_MAP.get(p.status(), p.status().upper())
-                    child_count = len(p.children())
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-            proc_type = get_process_type(pid, name)
-            return (pid, name, status_label, child_count, proc_type)
-    return None
+    conns = ports.get(port)
+    if not conns:
+        return None
+
+    pids = []
+    for conn in conns:
+        if conn.pid and conn.pid not in pids:
+            pids.append(conn.pid)
+
+    pid = pids[0] if pids else conns[0].pid
+    name, status_label, child_count = "—", "EM USO", 0
+    p = None
+    if pid:
+        try:
+            p = psutil.Process(pid)
+            name = p.name()
+            status = p.status()
+            status_label = STATUS_MAP.get(status, status.upper())
+            child_count = child_counts.get(pid, 0) if child_counts else len(p.children())
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    proc_type = get_process_type(pid, name, proc=p)
+    return PortInfo(pid, name, status_label, child_count, proc_type, pids)
 
 
 # ── Confirmation dialog ───────────────────────────────────────────────────────
@@ -157,8 +277,10 @@ class Tooltip:
         self._tip = None
         widget.bind("<Enter>", self._show)
         widget.bind("<Leave>", self._hide)
+        widget.bind("<Destroy>", self._hide)      # else the tip outlives its widget
 
     def _show(self, event):
+        self._hide(event)                         # never stack two tips
         x = self._widget.winfo_rootx() + self._widget.winfo_width() // 2
         y = self._widget.winfo_rooty() - 26
         self._tip = tk.Toplevel(self._widget)
@@ -169,9 +291,12 @@ class Tooltip:
                  bg=COLORS["surface2"], fg=COLORS["text"],
                  relief="flat", padx=8, pady=4).pack()
 
-    def _hide(self, event):
+    def _hide(self, event=None):
         if self._tip:
-            self._tip.destroy()
+            try:
+                self._tip.destroy()
+            except tk.TclError:
+                pass
             self._tip = None
 
 
@@ -180,21 +305,31 @@ class ConfirmKillDialog(tk.Toplevel):
 
     def __init__(self, parent, targets):
         super().__init__(parent)
+        self.withdraw()                       # place it before it is ever drawn
         self.transient(parent)
-        self.grab_set()
         self.resizable(False, False)
         self.configure(bg=COLORS["bg"])
         self.title("Confirmar encerramento")
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
 
         self.confirmed = False
         self.password = None
-        self._need_pw = sys.platform != "win32" and not is_admin()
+        self._offer_pw = sys.platform != "win32" and not is_admin()
 
         self._build(targets)
         self.update_idletasks()
         x = parent.winfo_x() + (parent.winfo_width()  - self.winfo_width())  // 2
         y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
         self.geometry(f"+{x}+{y}")
+
+        # X11 refuses a grab on a window that is not yet viewable, which used
+        # to raise TclError on Linux. Wait for the map before grabbing.
+        self.deiconify()
+        try:
+            self.wait_visibility()
+            self.grab_set()
+        except tk.TclError:
+            pass                              # worst case the dialog is not modal
         self.wait_window()
 
     def _build(self, targets):
@@ -206,23 +341,32 @@ class ConfirmKillDialog(tk.Toplevel):
         frame = tk.Frame(self, bg=COLORS["surface"],
                          highlightthickness=1, highlightbackground=COLORS["border"])
         frame.pack(fill=tk.X, padx=24, pady=(0, 8))
-        for port, pid, name in targets:
-            tk.Label(frame, text=f"  Porta {port}  •  {name}  •  PID {pid}",
+        for t in targets:
+            extra = f"  (+{t.children} filho(s))" if t.children else ""
+            tk.Label(frame,
+                     text=f"  Porta {t.port}  •  {t.name}  •  PID {t.pid}{extra}",
                      font=("Segoe UI", 10),
                      bg=COLORS["surface"], fg=COLORS["yellow"],
                      anchor="w").pack(fill=tk.X, padx=12, pady=3)
 
         tk.Label(self,
-                 text="Esta ação é irreversível. Os processos serão\n"
-                      "encerrados forçadamente se necessário.",
+                 text="Esta ação é irreversível. Os processos filhos também\n"
+                      "serão encerrados, à força se necessário.",
                  font=("Segoe UI", 9),
                  bg=COLORS["bg"], fg=COLORS["subtext"],
                  justify="left").pack(anchor="w", padx=24, pady=(0, 8))
 
-        if self._need_pw:
-            tk.Label(self, text="Senha de administrador (sudo):",
+        if self._offer_pw:
+            # Optional: your own processes die without sudo. Demanding a
+            # password up front blocked killing your own dev server, and an
+            # empty field made the Encerrar button silently do nothing.
+            tk.Label(self, text="Senha de administrador (sudo) — opcional:",
                      font=("Segoe UI", 10),
                      bg=COLORS["bg"], fg=COLORS["text"]
+                     ).pack(anchor="w", padx=24)
+            tk.Label(self, text="Necessária apenas para processos de outro usuário.",
+                     font=("Segoe UI", 8),
+                     bg=COLORS["bg"], fg=COLORS["subtext"]
                      ).pack(anchor="w", padx=24)
             self._pw_var = tk.StringVar()
             pw = tk.Entry(self, textvariable=self._pw_var, show="●",
@@ -256,11 +400,8 @@ class ConfirmKillDialog(tk.Toplevel):
                   ).pack(side=tk.RIGHT)
 
     def _confirm(self):
-        if self._need_pw:
-            pw = self._pw_var.get()
-            if not pw:
-                return
-            self.password = pw
+        if self._offer_pw:
+            self.password = self._pw_var.get() or None
         self.confirmed = True
         self.destroy()
 
@@ -269,6 +410,8 @@ class ConfirmKillDialog(tk.Toplevel):
 
 class PortKillerApp:
     REFRESH_MS = 4000
+    TERM_GRACE_S = 1.5      # time a process gets to shut down cleanly
+    KILL_GRACE_S = 1.0      # time to disappear after SIGKILL
 
     def __init__(self, root):
         self.root = root
@@ -281,17 +424,47 @@ class PortKillerApp:
         self.current_pid = None
         self.current_port = None
         self._refresh_job = None
-        self._pinned = load_pins()
+        self._pinned, self._pins_writable = load_pins()
 
-        try:
-            self.root.iconbitmap(default="")
-        except Exception:
-            pass
+        self._set_window_icon()
 
         self._setup_styles()
         self._build_ui()
         self._refresh_list()
         self._schedule_refresh()
+
+        if not self._pins_writable:
+            self.root.after(100, self._warn_pins_unreadable)
+
+    def _set_window_icon(self):
+        # The previous iconbitmap(default="") was a no-op, so the app ran with
+        # Tk's default icon everywhere. Keep a reference: Tk does not own the
+        # PhotoImage and it would be garbage collected out from under us.
+        for name in ("port_killer.png", "port_killer.ico"):
+            path = resource_path(name)
+            if not os.path.exists(path):
+                continue
+            try:
+                if name.endswith(".ico") and sys.platform == "win32":
+                    self.root.iconbitmap(path)
+                else:
+                    self._icon = tk.PhotoImage(file=path)
+                    self.root.iconphoto(True, self._icon)
+                return
+            except Exception:
+                continue
+
+    def _warn_pins_unreadable(self):
+        messagebox.showwarning(
+            "Lista de portas indisponível",
+            f"Não foi possível ler:\n{_pins_path()}\n\n"
+            "A lista começou vazia e não será salva nesta sessão, para não "
+            "sobrescrever as portas que já estão no arquivo.")
+
+    def _save_pins(self):
+        """Never write over a pin file we failed to read — it may hold pins we never saw."""
+        if self._pins_writable:
+            save_pins(self._pinned)
 
     # ── Styles ────────────────────────────────────────────────────────────────
 
@@ -504,7 +677,8 @@ class PortKillerApp:
 
         # Footer
         tk.Label(self.root,
-                 text=f"Python {sys.version.split()[0]}  •  psutil {psutil.__version__}  •  {sys.platform}",
+                 text=f"v{APP_VERSION}  •  Python {sys.version.split()[0]}"
+                      f"  •  psutil {psutil.__version__}  •  {sys.platform}",
                  font=("Segoe UI", 7),
                  bg=COLORS["bg"], fg=COLORS["border"]
                  ).pack(side=tk.BOTTOM, pady=3)
@@ -518,6 +692,12 @@ class PortKillerApp:
             if not (1 <= port <= 65535):
                 raise ValueError
         except ValueError:
+            # Leaving the previous port selected let "Pinar" pin a port that
+            # was no longer the one on screen.
+            self.current_port = None
+            self.current_pid = None
+            self._set_card_idle("Porta inválida")
+            self._update_pin_btn()
             messagebox.showerror("Porta inválida", "Digite um número entre 1 e 65535.")
             return
 
@@ -534,9 +714,8 @@ class PortKillerApp:
         if result is None:
             self._set_card_free(port)
         else:
-            pid, name, status_label, child_count, proc_type = result
-            self.current_pid = pid
-            self._set_card_in_use(port, pid, name, status_label, child_count, proc_type)
+            self.current_pid = result.pid
+            self._set_card_in_use(port, result)
 
         self._update_pin_btn()
 
@@ -562,7 +741,7 @@ class PortKillerApp:
             return
         self._pinned.append(self.current_port)
         self._pinned.sort()
-        save_pins(self._pinned)
+        self._save_pins()
         self._refresh_list()
         self._update_pin_btn()
 
@@ -575,7 +754,7 @@ class PortKillerApp:
             port = int(self.tree.item(iid)["values"][0])
             if port in self._pinned:
                 self._pinned.remove(port)
-        save_pins(self._pinned)
+        self._save_pins()
         self._refresh_list()
         self._update_pin_btn()
 
@@ -588,41 +767,58 @@ class PortKillerApp:
                                    "Os processos não serão encerrados."):
             return
         self._pinned.clear()
-        save_pins(self._pinned)
+        self._save_pins()
         self._refresh_list()
         self._update_pin_btn()
 
     # ── List refresh ──────────────────────────────────────────────────────────
 
-    def _refresh_list(self):
-        for iid in self.tree.get_children():
-            self.tree.delete(iid)
+    @staticmethod
+    def _row_for(port, snapshot):
+        result = get_port_info(port, snapshot)
+        if result == "ACCESS_DENIED":
+            return (port, "ERRO", "—", "—", "—", "—"), "error"
+        if result is None:
+            return (port, "LIVRE", "—", "—", "—", "—"), "free"
+        pid_txt = str(result.pid) if result.pid else "—"
+        if len(result.pids) > 1:
+            pid_txt += f" +{len(result.pids) - 1}"      # SO_REUSEPORT / dual-stack
+        ch_txt = str(result.children) if result.children else "—"
+        tag = "active" if result.status == "EM USO" else "idle"
+        return (port, result.status, result.proc_type, result.name, pid_txt, ch_txt), tag
 
-        for port in self._pinned:
-            result = get_port_info(port)
-            if result == "ACCESS_DENIED":
-                self.tree.insert("", tk.END,
-                                 values=(port, "ERRO", "—", "—", "—", "—"),
-                                 tags=("error",))
-            elif result is None:
-                self.tree.insert("", tk.END,
-                                 values=(port, "LIVRE", "—", "—", "—", "—"),
-                                 tags=("free",))
+    def _refresh_list(self):
+        # Rows are keyed by port and updated in place. Rebuilding the tree
+        # cleared the selection on every tick, so "Remover da lista" only
+        # worked if the user clicked within 4 s of selecting.
+        snapshot = system_snapshot()
+        wanted = {str(port) for port in self._pinned}
+
+        for iid in self.tree.get_children():
+            if iid not in wanted:
+                self.tree.delete(iid)
+
+        for index, port in enumerate(self._pinned):
+            iid = str(port)
+            values, tag = self._row_for(port, snapshot)
+            if self.tree.exists(iid):
+                self.tree.item(iid, values=values, tags=(tag,))
+                self.tree.move(iid, "", index)
             else:
-                pid, name, status_label, child_count, proc_type = result
-                pid_txt = str(pid) if pid else "—"
-                ch_txt = str(child_count) if child_count else "—"
-                tag = "active" if status_label == "EM USO" else "idle"
-                self.tree.insert("", tk.END,
-                                 values=(port, status_label, proc_type, name, pid_txt, ch_txt),
-                                 tags=(tag,))
+                self.tree.insert("", index, iid=iid, values=values, tags=(tag,))
 
     def _schedule_refresh(self):
         self._refresh_job = self.root.after(self.REFRESH_MS, self._auto_refresh)
 
     def _auto_refresh(self):
-        self._refresh_list()
-        self._schedule_refresh()
+        # A single unexpected error used to stop the timer for good, freezing
+        # the list with no visible sign of it (the build runs console=False).
+        try:
+            self._refresh_list()
+        except Exception:
+            pass
+        finally:
+            self._schedule_refresh()
 
     # ── Kill operations ───────────────────────────────────────────────────────
 
@@ -632,81 +828,212 @@ class PortKillerApp:
             return
         vals = self.tree.item(iid)["values"]
         # cols: port, status, type, process, pid, children
-        port, status, pid_txt, name = int(vals[0]), str(vals[1]), str(vals[4]), str(vals[3])
+        port, status, pid_txt = int(vals[0]), str(vals[1]), str(vals[4])
         if status == "LIVRE" or pid_txt == "—":
             return
-        pid = int(pid_txt)
-        if messagebox.askyesno("Confirmar",
-                               f"Encerrar '{name}' (PID {pid}) na porta {port}?"):
-            self._do_kill(pid, password=None)
-            self._refresh_list()
+        self._run_kill(self._resolve_targets([port]))
 
     def _kill_from_card(self):
-        if not self.current_pid:
+        if not self.current_port:
             return
-        try:
-            name = psutil.Process(self.current_pid).name()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            name = "Desconhecido"
-        if messagebox.askyesno("Confirmar encerramento",
-                               f"Encerrar '{name}' (PID {self.current_pid})"
-                               f" na porta {self.current_port}?"):
-            self._do_kill(self.current_pid, password=None)
+        if self._run_kill(self._resolve_targets([self.current_port])):
             self._check_port()
-            self._refresh_list()
 
     def _kill_all(self):
-        targets = []
-        for iid in self.tree.get_children():
-            vals = self.tree.item(iid)["values"]
-            # cols: port, status, type, process, pid, children
-            status, pid_txt, name = str(vals[1]), str(vals[4]), str(vals[3])
-            if status != "LIVRE" and pid_txt != "—":
-                targets.append((int(vals[0]), int(pid_txt), name))
+        self._run_kill(self._resolve_targets(self._pinned))
+
+    @staticmethod
+    def _resolve_targets(ports):
+        """
+        Ask the OS who owns these ports *now*.
+
+        Targets used to be read off the table, which the 4 s timer had already
+        rewritten — and could rewrite again while the dialog was open. The
+        table is a view; it is not a safe source of PIDs to kill.
+        """
+        snapshot = system_snapshot()
+        targets, claimed = [], set()
+        for port in ports:
+            result = get_port_info(port, snapshot)
+            if result is None or result == "ACCESS_DENIED":
+                continue
+            # One target per process on the port: with SO_REUSEPORT the port
+            # stays bound unless every one of them goes.
+            for pid in result.pids:
+                if pid in claimed:
+                    continue          # one process can hold several pinned ports
+                claimed.add(pid)
+                try:
+                    proc = psutil.Process(pid)
+                    create_time = proc.create_time()
+                    name = proc.name()
+                except (psutil.Error, OSError):
+                    continue
+                try:
+                    children = len(proc.children(recursive=True))
+                except (psutil.Error, OSError):
+                    children = 0
+                targets.append(Target(port, pid, name, create_time, children))
+        return targets
+
+    def _run_kill(self, targets):
+        """
+        The single path for every kill: confirmation, the sudo prompt where
+        one is needed, and a report of what actually happened. Double-click
+        and the card button used to bypass all three — a denied kill was
+        indistinguishable from a successful one.
+
+        Returns True if the user confirmed.
+        """
         if not targets:
-            messagebox.showinfo("Info", "Nenhum processo ativo na lista pinada.")
-            return
-        self._run_bulk_kill(targets)
-
-    def _run_bulk_kill(self, targets):
-        dlg = ConfirmKillDialog(self.root, targets)
-        if not dlg.confirmed:
-            return
-        killed = failed = 0
-        for _, pid, _ in targets:
-            if self._do_kill(pid, password=dlg.password):
-                killed += 1
-            else:
-                failed += 1
-        parts = [f"{killed} processo(s) encerrado(s)."]
-        if failed:
-            parts.append(f"{failed} falha(s) — execute como Administrador.")
-        messagebox.showinfo("Resultado", "\n".join(parts))
-        self._refresh_list()
-
-    def _do_kill(self, pid, password):
-        try:
-            p = psutil.Process(pid)
-            p.terminate()
-            time.sleep(0.5)
-            if p.is_running() and p.status() != psutil.STATUS_ZOMBIE:
-                p.kill()
-            return True
-        except psutil.NoSuchProcess:
-            return True
-        except psutil.AccessDenied:
-            if password and sys.platform != "win32":
-                return self._sudo_kill(pid, password)
+            messagebox.showinfo("Info", "Nenhum processo ativo para encerrar.")
             return False
+
+        # The timer must not rewrite the table while the user reads the
+        # dialog — and must not race the kills that follow.
+        self._pause_refresh()
+        try:
+            dlg = ConfirmKillDialog(self.root, targets)
+            if not dlg.confirmed:
+                return False
+
+            tally = {"killed": 0, "denied": 0, "stale": 0}
+            for t in targets:
+                tally[self._do_kill(t.pid, dlg.password, t.create_time)] += 1
+        finally:
+            self._resume_refresh()
+
+        self._refresh_list()
+        if tally["denied"] and self._offer_elevation(tally["denied"]):
+            return True
+
+        parts = [f"{tally['killed']} processo(s) encerrado(s)."]
+        if tally["stale"]:
+            parts.append(f"{tally['stale']} ignorado(s) — o PID passou a "
+                         "pertencer a outro processo.")
+        if tally["denied"]:
+            hint = ("execute como Administrador."
+                    if sys.platform == "win32" else "permissão negada.")
+            parts.append(f"{tally['denied']} falha(s) — {hint}")
+
+        show = messagebox.showwarning if len(parts) > 1 else messagebox.showinfo
+        show("Resultado", "\n".join(parts))
+        return True
+
+    def _offer_elevation(self, denied):
+        """
+        Windows has no sudo prompt to fall back on, so a denied kill used to
+        end at "execute como Administrador" with no way to actually do it.
+        Offer the UAC relaunch instead. Returns True if we are restarting.
+        """
+        if sys.platform != "win32" or is_admin():
+            return False
+        if not messagebox.askyesno(
+                "Permissão negada",
+                f"{denied} processo(s) exigem privilégios de Administrador.\n\n"
+                "Reabrir o Port Killer como Administrador?"):
+            return False
+        try:
+            import ctypes
+            if getattr(sys, "frozen", False):
+                target, params = sys.executable, ""
+            else:
+                target = sys.executable
+                params = f'"{os.path.abspath(__file__)}"'
+            rc = ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", target, params, os.getcwd(), 1)
+            if rc <= 32:                       # ShellExecuteW error, incl. user declining UAC
+                return False
         except Exception:
             return False
+        self._on_close()
+        return True
 
-    def _sudo_kill(self, pid, password):
+    def _pause_refresh(self):
+        if self._refresh_job:
+            self.root.after_cancel(self._refresh_job)
+            self._refresh_job = None
+
+    def _resume_refresh(self):
+        if not self._refresh_job:
+            self._schedule_refresh()
+
+    def _do_kill(self, pid, password, create_time=None):
+        """
+        Terminate the process *and its children*, then confirm they are gone.
+
+        The app has always shown a "Filhos" column because it matters: killing
+        a lone parent leaves orphans holding the port, which is the everyday
+        npm/node case the tool exists for. The old version also reported
+        success without ever checking whether the process actually died.
+
+        Returns 'killed', 'denied', or 'stale' (PID now holds another process).
+        """
+        try:
+            parent = psutil.Process(pid)
+            if create_time is not None and parent.create_time() != create_time:
+                return "stale"
+        except psutil.NoSuchProcess:
+            return "killed"
+        except (psutil.Error, OSError):
+            return "denied"
+
+        try:
+            family = parent.children(recursive=True)
+        except (psutil.Error, OSError):
+            family = []
+        family.append(parent)
+
+        alive = self._signal_family(family, "terminate", self.TERM_GRACE_S)
+        if alive:
+            alive = self._signal_family(alive, "kill", self.KILL_GRACE_S)
+        if alive and password and sys.platform != "win32":
+            alive = self._sudo_family(alive, password)
+        return "denied" if alive else "killed"
+
+    @classmethod
+    def _signal_family(cls, procs, action, timeout):
+        """Signal every process, then report who is still standing."""
+        for proc in procs:
+            try:
+                getattr(proc, action)()
+            except (psutil.Error, OSError):
+                pass
+        _, alive = psutil.wait_procs(procs, timeout=timeout)
+        return [p for p in alive if cls._still_holding(p)]
+
+    @staticmethod
+    def _still_holding(proc):
+        """A zombie has already released its ports and cannot be killed again."""
+        try:
+            return proc.status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
+        except (psutil.Error, OSError):
+            return True
+
+    def _sudo_family(self, procs, password):
+        """
+        Escalate for whatever survived: TERM first, KILL only if needed, and
+        one sudo call per round instead of one per PID.
+        """
+        for sig, grace in (("-TERM", self.TERM_GRACE_S), ("-KILL", self.KILL_GRACE_S)):
+            if not procs:
+                break
+            self._sudo_kill([p.pid for p in procs], password, sig)
+            _, procs = psutil.wait_procs(procs, timeout=grace)
+            procs = [p for p in procs if self._still_holding(p)]
+        return procs
+
+    @staticmethod
+    def _sudo_kill(pids, password, sig="-KILL"):
+        if not pids:
+            return True
         try:
             r = subprocess.run(
-                ["sudo", "-S", "kill", "-9", str(pid)],
+                ["sudo", "-S", "-p", "", "kill", sig] + [str(p) for p in pids],
                 input=f"{password}\n",
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, timeout=15)
             return r.returncode == 0
         except Exception:
             return False
@@ -730,16 +1057,19 @@ class PortKillerApp:
         self.kill_btn.configure(state=tk.DISABLED,
                                 bg=COLORS["border"], fg=COLORS["subtext"], cursor="arrow")
 
-    def _set_card_in_use(self, port, pid, name, status_label, child_count, proc_type):
-        color = COLORS["red"] if status_label == "EM USO" else COLORS["yellow"]
+    def _set_card_in_use(self, port, info):
+        color = COLORS["red"] if info.status == "EM USO" else COLORS["yellow"]
         self.card.configure(highlightbackground=color)
         self.status_icon.configure(text="●", fg=color)
         self.status_label.configure(text=f"Porta {port} está EM USO", fg=color)
-        children_txt = f"   •   Filhos: {child_count}" if child_count else ""
+        children_txt = f"   •   Filhos: {info.children}" if info.children else ""
+        extra_txt = (f"   •   +{len(info.pids) - 1} processo(s) na mesma porta"
+                     if len(info.pids) > 1 else "")
         self.detail_label.configure(
-            text=f"PID: {pid}   •   {name}   •   {status_label}   •   {proc_type}{children_txt}",
+            text=f"PID: {info.pid}   •   {info.name}   •   {info.status}"
+                 f"   •   {info.proc_type}{children_txt}{extra_txt}",
             fg=COLORS["yellow"])
-        if pid:
+        if info.pid:
             self.kill_btn.configure(state=tk.NORMAL,
                                     bg=COLORS["button_kill"], fg=COLORS["bg"],
                                     cursor="hand2")

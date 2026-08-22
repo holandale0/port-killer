@@ -3,7 +3,11 @@
 ; Download Inno Setup: https://jrsoftware.org/isdl.php
 
 #define AppName "Port Killer"
-#define AppVersion "1.0.0"
+; build.py passes /DAppVersion=<version> read from port_killer.py; the default
+; below only matters when compiling this script by hand.
+#ifndef AppVersion
+  #define AppVersion "1.0.0"
+#endif
 #define AppExeName "PortKiller.exe"
 #define AppPublisher "Port Killer"
 
@@ -24,6 +28,11 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#AppExeName}
+SetupIconFile=port_killer.ico
+
+[UninstallDelete]
+; Pinned-port list written by the app at runtime.
+Type: files; Name: "{userappdata}\.port_killer_pins.json"
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

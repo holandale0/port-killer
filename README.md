@@ -40,7 +40,7 @@ Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção d
 - Status detalhado por porta: `EM USO`, `LIVRE`, `DORMINDO`, `PARADO`, `ZUMBI`, `AGUARD. E/S`
 - Encerra processo individual via botão ou duplo clique na lista
 - **Encerrar todas** — encerra de uma vez todos os processos com status diferente de `LIVRE`
-- Confirmação obrigatória nas ações em massa; senha sudo nas ações em massa no Linux/macOS
+- Confirmação obrigatória em **todo** encerramento; senha sudo opcional no Linux/macOS (necessária apenas para processos de outro usuário)
 - Interface **dark mode** com tema [Catppuccin Mocha](https://github.com/catppuccin/catppuccin)
 - Distribuído como executável standalone — **sem precisar instalar Python**
 
@@ -65,9 +65,9 @@ Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção d
 
 **Serviços críticos do SO** — Matar processos como DNS, firewall, antivírus ou agentes de segurança pode desestabilizar o sistema ou abrir brechas de segurança até a próxima reinicialização.
 
-**Processos filhos órfãos** — O app encerra apenas o processo identificado pelo PID. Processos filhos podem continuar rodando em segundo plano, consumindo recursos ou mantendo a porta ocupada.
+**Árvore de processos** — O app encerra o processo **e todos os seus descendentes**. É isso que libera de fato a porta em casos como `npm`/`node`, mas amplia o alcance da ação: confira a coluna **Filhos** antes de confirmar — o dialog mostra quantos descendentes serão atingidos.
 
-**Encerramento forçado (SIGKILL)** — Se o processo não responder ao SIGTERM, o app aplica SIGKILL — uma finalização forçada que o processo não pode capturar, ignorar ou tratar. Nenhum dado em memória é salvo.
+**Encerramento forçado (SIGKILL)** — Cada processo recebe SIGTERM e tem 1,5 s para sair limpo. Quem não sair leva SIGKILL — uma finalização forçada que o processo não pode capturar, ignorar ou tratar. Nenhum dado em memória é salvo.
 
 **Ambientes de produção** — Nunca use esta ferramenta em servidores de produção sem antes entender exatamente o que o processo faz. Interromper um servidor web ativo encerra imediatamente todas as sessões de usuários conectados.
 
@@ -81,7 +81,7 @@ Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção d
 | tkinter | built-in | Interface gráfica |
 | psutil | ≥ 5.9.0 | Inspeção de processos e conexões de rede |
 | PyInstaller | ≥ 6.0 | Empacotamento do executável standalone |
-| Inno Setup | 6 | Criação do instalador Windows (.exe) |
+| Inno Setup | 6.3+ | Criação do instalador Windows (.exe) |
 
 ---
 
@@ -122,7 +122,7 @@ Resultado por plataforma:
 
 | Plataforma | Pré-requisito extra | Saída |
 |---|---|---|
-| Windows | [Inno Setup 6](https://jrsoftware.org/isdl.php) | `installer/windows/Output/PortKiller_Setup_1.0.0.exe` |
+| Windows | [Inno Setup 6.3+](https://jrsoftware.org/isdl.php) | `installer/windows/Output/PortKiller_Setup_1.0.0.exe` |
 | Linux | [appimagetool](https://github.com/AppImage/AppImageKit/releases) | `dist/PortKiller-1.0.0-x86_64.AppImage` |
 | macOS | `hdiutil` *(já incluso no macOS)* | `dist/PortKiller-1.0.0.dmg` |
 
@@ -130,9 +130,26 @@ Resultado por plataforma:
 
 ---
 
+## 🧪 Testes
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Sem dependências extras. Os testes de interface se pulam sozinhos quando não há
+Tk/display disponível. O CI roda a suíte em Windows, Linux e macOS (Python 3.10
+e 3.13) e compila os instaladores das três plataformas a cada push.
+
+---
+
 ## ⚠️ Permissões
 
 Em alguns sistemas pode ser necessário executar como **Administrador** (Windows) ou com **sudo** (Linux/macOS) para visualizar processos de sistema ou encerrar processos privilegiados.
+
+- **Windows** — ao encontrar um processo sem permissão, o app oferece reabrir a si mesmo como Administrador (UAC).
+- **Linux/macOS** — o dialog de confirmação tem um campo de senha sudo **opcional**, usado apenas se o encerramento normal for negado.
+
+Processos cujo dono não pode ser lido aparecem como `Desconhecido` — nunca como `Aplicação`.
 
 ---
 
@@ -147,10 +164,16 @@ Em alguns sistemas pode ser necessário executar como **Administrador** (Windows
 - [x] Status detalhado: EM USO, LIVRE, DORMINDO, PARADO, ZUMBI etc.
 - [x] Encerrar processo por duplo clique na lista
 - [x] Encerrar todas as portas com status diferente de LIVRE
-- [x] Dialog de confirmação com senha sudo (Linux/macOS)
+- [x] Dialog de confirmação com senha sudo opcional (Linux/macOS)
+- [x] Encerramento da árvore de processos (pai + descendentes)
+- [x] Detecção de múltiplos processos na mesma porta (SO_REUSEPORT, dual-stack)
 - [x] Limpar lista pinada
 - [x] Interface dark mode (Catppuccin Mocha)
 - [x] Instalador Windows com wizard (Inno Setup)
 - [x] AppImage para Linux
 - [x] DMG para macOS
 - [x] Script de build automatizado (`build.py`)
+- [x] Ícones próprios (`.png`, `.ico`, `.icns`) em todas as plataformas
+- [x] Relaunch com elevação UAC no Windows
+- [x] Suíte de testes (`python -m unittest discover -s tests`)
+- [x] CI em Windows, Linux e macOS (GitHub Actions)

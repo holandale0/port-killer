@@ -1,11 +1,34 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 import sys
+
+# Version and icons come from the repo, not from copies kept in this file.
+APP_VERSION = None
+with open("port_killer.py", encoding="utf-8") as _f:
+    for _line in _f:
+        if _line.startswith("APP_VERSION"):
+            APP_VERSION = _line.split("=", 1)[1].strip().strip("\"\'")
+            break
+if not APP_VERSION:
+    raise SystemExit("APP_VERSION nao encontrado em port_killer.py")
+
+_ICONS = {
+    "win32":  os.path.join("installer", "windows", "port_killer.ico"),
+    "darwin": os.path.join("installer", "macos", "port_killer.icns"),
+}
+ICON = _ICONS.get(sys.platform)
+if ICON and not os.path.exists(ICON):
+    ICON = None
+
+# Shipped so the running app can set its own window icon.
+_WINDOW_ICON = os.path.join("installer", "linux", "port_killer.png")
+DATAS = [(_WINDOW_ICON, ".")] if os.path.exists(_WINDOW_ICON) else []
 
 a = Analysis(
     ['port_killer.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=DATAS,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -33,6 +56,7 @@ if sys.platform == 'darwin':
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
+        icon=ICON,
     )
     coll = COLLECT(
         exe,
@@ -47,14 +71,14 @@ if sys.platform == 'darwin':
     app = BUNDLE(
         coll,
         name='PortKiller.app',
-        icon=None,
+        icon=ICON,
         bundle_identifier='com.portkiller.app',
-        version='1.0.0',
+        version=APP_VERSION,
         info_plist={
             'CFBundleName': 'Port Killer',
             'CFBundleDisplayName': 'Port Killer',
-            'CFBundleVersion': '1.0.0',
-            'CFBundleShortVersionString': '1.0.0',
+            'CFBundleVersion': APP_VERSION,
+            'CFBundleShortVersionString': APP_VERSION,
             'NSHighResolutionCapable': True,
             'NSRequiresAquaSystemAppearance': False,
         },
@@ -81,4 +105,5 @@ else:
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
+        icon=ICON,
     )

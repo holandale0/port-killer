@@ -25,7 +25,7 @@ PyInstaller embute o Python e o psutil no executável final — o usuário
 |---|---|---|
 | Python 3.x (com tkinter) | Sim | python.org |
 | PyInstaller | Sim | `pip install pyinstaller` |
-| Inno Setup 6 | Para o `.exe` instalador | jrsoftware.org/isdl.php |
+| Inno Setup 6.3+ | Para o `.exe` instalador | jrsoftware.org/isdl.php |
 
 ### Build
 ```cmd
@@ -87,20 +87,37 @@ Resultado: `dist/PortKiller-1.0.0.dmg`
 
 ```
 port-killer/
-├── port_killer.py              # Aplicação principal
+├── port_killer.py              # Aplicação principal (define APP_VERSION)
 ├── requirements.txt            # psutil>=5.9.0
 ├── port_killer.spec            # Configuração do PyInstaller
 ├── build.py                    # Script de build unificado
+├── tests/
+│   └── test_port_killer.py     # Suíte de testes (stdlib unittest)
 └── installer/
     ├── windows/
     │   ├── setup.iss           # Script do Inno Setup
+    │   ├── port_killer.ico     # Ícone do .exe e do instalador
     │   └── Output/             # Gerado: instalador .exe
     ├── linux/
     │   ├── AppRun              # Entry point do AppImage
     │   ├── port_killer.desktop # Integração com desktop Linux
+    │   ├── port_killer.png     # Ícone exigido pelo appimagetool
     │   └── AppDir/             # Gerado durante o build
     └── macos/
-        └── build_dmg.sh        # Script auxiliar para o DMG
+        ├── build_dmg.sh        # Script auxiliar para o DMG
+        └── port_killer.icns    # Ícone do .app
+```
+
+## Versão
+
+`APP_VERSION` em `port_killer.py` é a fonte única. O `build.py`, o
+`port_killer.spec`, o `setup.iss` (via `/DAppVersion`) e o `build_dmg.sh` leem
+de lá — para lançar uma versão nova, basta alterar essa linha.
+
+## Testes
+
+```bash
+python -m unittest discover -s tests -v
 ```
 
 ---

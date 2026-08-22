@@ -22,8 +22,25 @@ import argparse
 import venv
 
 APP_NAME = "PortKiller"
-APP_VERSION = "1.0.0"
 MAIN_SCRIPT = "port_killer.py"
+
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def read_version():
+    """
+    The version lives in port_killer.py. Parsed rather than imported so this
+    script still runs before psutil/tkinter are installed.
+    """
+    src = os.path.join(PROJECT_ROOT, MAIN_SCRIPT)
+    with open(src, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("APP_VERSION"):
+                return line.split("=", 1)[1].strip().strip("\"\'")
+    raise SystemExit(f"APP_VERSION nao encontrado em {src}")
+
+
+APP_VERSION = read_version()
 
 INNO_SETUP_PATHS = [
     r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
@@ -56,10 +73,7 @@ def ensure_venv():
     try:
         import ensurepip  # noqa: F401
     except ImportError:
-        ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-        pkg = f"python{ver}-venv"
-        print(f"ensurepip not available. Installing {pkg} via apt ...")
-        subprocess.run(["sudo", "apt", "install", "-y", pkg], check=True)
+        install_venv_package()
 
     print("Creating build venv at .build-venv ...")
     venv.create(VENV_DIR, with_pip=True, clear=True)
@@ -74,8 +88,41 @@ def ensure_venv():
     sys.exit(result.returncode)
 
 
-def clean():
-    for d in ["build", "dist"]:
+def install_venv_package():
+    """
+    ensurepip ships separately on Debian/Ubuntu. Hardcoding apt broke the build
+    outright on Fedora/Arch/openSUSE, so pick the distro's own tool and say
+    something useful when there is none.
+    """
+    ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    managers = [
+        ("apt",    ["sudo", "apt", "install", "-y", f"python{ver}-venv"]),
+        ("dnf",    ["sudo", "dnf", "install", "-y", "python3-virtualenv"]),
+        ("pacman", ["sudo", "pacman", "-S", "--noconfirm", "python-virtualenv"]),
+        ("zypper", ["sudo", "zypper", "install", "-y", "python3-virtualenv"]),
+        ("apk",    ["sudo", "apk", "add", "py3-virtualenv"]),
+    ]
+    for tool, cmd in managers:
+        if shutil.which(tool):
+            print(f"ensurepip not available. Installing via {tool} ...")
+            subprocess.run(cmd, check=True)
+            return
+    raise SystemExit(
+        "ensurepip nao esta disponivel e nenhum gerenciador de pacotes conhecido "
+        f"foi encontrado.\nInstale o pacote venv do Python {ver} manualmente e "
+        "rode o build de novo.")
+
+
+def clean(deep=False):
+    # AppDir is staging: leftovers from an earlier build would be packed into
+    # the next AppImage.
+    targets = ["build", "dist", os.path.join("installer", "linux", "AppDir")]
+    if deep:
+        targets.append(os.path.join("installer", "windows", "Output"))
+        # Never delete the venv we are currently running from.
+        if os.path.abspath(sys.prefix) != os.path.abspath(VENV_DIR):
+            targets.append(VENV_DIR)
+    for d in targets:
         if os.path.exists(d):
             shutil.rmtree(d)
             print(f"Removed {d}/")
@@ -104,28 +151,40 @@ def build_windows_installer():
 
     output_dir = os.path.join("installer", "windows", "Output")
     os.makedirs(output_dir, exist_ok=True)
-    run([iscc, os.path.join("installer", "windows", "setup.iss")])
+    run([iscc, f"/DAppVersion={APP_VERSION}",
+         os.path.join("installer", "windows", "setup.iss")])
     print(f"\nInstaller: {output_dir}\\PortKiller_Setup_{APP_VERSION}.exe")
 
 
 # ── Linux ─────────────────────────────────────────────────────────────────────
 
 def build_linux_appimage():
-    appdir = os.path.join("installer", "linux", "AppDir")
+    src = os.path.join("installer", "linux")
+    appdir = os.path.join(src, "AppDir")
+    if os.path.exists(appdir):
+        shutil.rmtree(appdir)
+
     bin_dir = os.path.join(appdir, "usr", "bin")
-    os.makedirs(bin_dir, exist_ok=True)
+    icon_dir = os.path.join(appdir, "usr", "share", "icons", "hicolor", "256x256", "apps")
+    apps_dir = os.path.join(appdir, "usr", "share", "applications")
+    for d in (bin_dir, icon_dir, apps_dir):
+        os.makedirs(d, exist_ok=True)
 
     shutil.copy(f"dist/{APP_NAME}", os.path.join(bin_dir, APP_NAME))
     os.chmod(os.path.join(bin_dir, APP_NAME), 0o755)
 
-    shutil.copy(
-        os.path.join("installer", "linux", "port_killer.desktop"),
-        os.path.join(appdir, "port_killer.desktop"),
-    )
-    shutil.copy(
-        os.path.join("installer", "linux", "AppRun"),
-        os.path.join(appdir, "AppRun"),
-    )
+    desktop = os.path.join(src, "port_killer.desktop")
+    icon = os.path.join(src, "port_killer.png")
+
+    # appimagetool resolves the .desktop's Icon= key against the AppDir root
+    # and aborts when it finds nothing, so the icon has to sit there too —
+    # the hicolor copy is what desktop environments pick up after install.
+    shutil.copy(desktop, os.path.join(appdir, "port_killer.desktop"))
+    shutil.copy(desktop, os.path.join(apps_dir, "port_killer.desktop"))
+    shutil.copy(icon, os.path.join(appdir, "port_killer.png"))
+    shutil.copy(icon, os.path.join(icon_dir, "port_killer.png"))
+
+    shutil.copy(os.path.join(src, "AppRun"), os.path.join(appdir, "AppRun"))
     os.chmod(os.path.join(appdir, "AppRun"), 0o755)
 
     appimagetool = shutil.which("appimagetool")
@@ -156,6 +215,15 @@ def build_macos_dmg():
     if os.path.exists(dmg_path):
         os.remove(dmg_path)
 
+    # Both tools take a *folder* whose contents become the volume root. Passing
+    # the .app itself put Contents/ at the root instead of the app, and broke
+    # create-dmg's --app-drop-link. Stage the bundle inside a folder first.
+    staging = os.path.join("build", "dmg")
+    shutil.rmtree(staging, ignore_errors=True)
+    os.makedirs(staging)
+    shutil.copytree(app_path, os.path.join(staging, f"{APP_NAME}.app"),
+                    symlinks=True)          # .app bundles rely on symlinks
+
     if shutil.which("create-dmg"):
         run([
             "create-dmg",
@@ -163,19 +231,21 @@ def build_macos_dmg():
             "--window-pos", "200", "120",
             "--window-size", "600", "400",
             "--icon-size", "100",
+            "--icon", f"{APP_NAME}.app", "175", "150",
             "--app-drop-link", "425", "150",
             dmg_path,
-            app_path,
+            staging,
         ])
     else:
         # hdiutil is built into macOS — no extra install needed
         run([
             "hdiutil", "create",
             "-volname", "Port Killer",
-            "-srcfolder", app_path,
+            "-srcfolder", staging,
             "-ov", "-format", "UDZO",
             dmg_path,
         ])
+    shutil.rmtree(staging, ignore_errors=True)
 
     print(f"\nDMG: {dmg_path}")
 
@@ -184,11 +254,16 @@ def build_macos_dmg():
 
 def main():
     parser = argparse.ArgumentParser(description="Build Port Killer installers")
-    parser.add_argument("--clean", action="store_true", help="Remove build artifacts and exit")
+    parser.add_argument("--clean", action="store_true",
+                        help="Remove build artifacts (and the build venv) and exit")
     args = parser.parse_args()
 
+    # Every path below is relative to the project; running `python /x/build.py`
+    # from elsewhere used to fail on requirements.txt and the .spec.
+    os.chdir(PROJECT_ROOT)
+
     if args.clean:
-        clean()
+        clean(deep=True)
         return
 
     ensure_venv()  # no-op on Windows or when already inside a venv
