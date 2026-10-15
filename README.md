@@ -5,14 +5,6 @@ Utilitário desktop para **verificar e encerrar processos** que estão ocupando 
 Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção de processos e conexões em tempo real.
 
 <p align="center">
-  <a href="https://github.com/holandale0/port-killer/releases/download/1.0.0/PortKiller_Setup_1.0.0.exe">
-    <img src="https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows"/>
-  </a>
-  &nbsp;
-  <a href="https://github.com/holandale0/port-killer/releases/download/1.0.0/PortKiller-1.0.0-x86_64.AppImage">
-    <img src="https://img.shields.io/badge/Download-Linux-E95420?style=for-the-badge&logo=linux&logoColor=white" alt="Download Linux"/>
-  </a>
-  &nbsp;
   <a href="https://github.com/holandale0/port-killer/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License MIT"/>
   </a>
@@ -38,7 +30,7 @@ Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção d
 - **Encerrar todas** — encerra de uma vez todos os processos com status diferente de `LIVRE`
 - Confirmação obrigatória em **todo** encerramento; senha sudo opcional no Linux (necessária apenas para processos de outro usuário)
 - Interface **dark mode** com tema [Catppuccin Mocha](https://github.com/catppuccin/catppuccin)
-- Distribuído como executável standalone — **sem precisar instalar Python**
+- Gera seu próprio instalador com um único comando — o executável final **não precisa de Python instalado**
 
 ---
 
@@ -83,18 +75,87 @@ Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção d
 
 ## 💻 Instalação
 
-### Executável pré-compilado (recomendado)
+O Port Killer não distribui instaladores prontos: você gera o seu a partir do
+código-fonte. O script `build.py` faz todo o trabalho — cria um ambiente
+virtual isolado, instala as dependências, empacota o Python e o psutil num
+executável standalone com o PyInstaller e monta o instalador nativo.
 
-Baixe o instalador do seu sistema na página de [Releases](https://github.com/holandale0/port-killer/releases):
+> Cada plataforma precisa ser compilada nela mesma: o PyInstaller não gera
+> executáveis para outro sistema operacional.
 
-| Plataforma | Arquivo |
-|---|---|
-| Windows 10 / 11 (64-bit) | `PortKiller_Setup_1.0.0.exe` |
-| Linux (x86_64) | `PortKiller-1.0.0-x86_64.AppImage` |
+### 🪟 Windows 10 / 11
 
-> O instalador já inclui o Python e todas as dependências — nenhuma instalação prévia é necessária.
+**1. Instale os pré-requisitos**
 
-### Executar pelo código-fonte
+| Ferramenta | Para quê | Onde obter |
+|---|---|---|
+| [Python 3.10+](https://www.python.org/downloads/) | Executar o build | Instalador oficial — o tkinter já vem incluso |
+| [Git](https://git-scm.com/download/win) | Baixar o código | Instalador oficial |
+| [Inno Setup 6.3+](https://jrsoftware.org/isdl.php) | Gerar o instalador `.exe` | Instalador oficial, no caminho padrão |
+
+**2. Baixe o código e gere o instalador**
+
+```powershell
+git clone https://github.com/holandale0/port-killer.git
+cd port-killer
+python build.py
+```
+
+O instalador é gerado em `installer\windows\Output\PortKiller_Setup_<versão>.exe`.
+
+**3. Instale**
+
+Execute o `.exe` gerado e confirme o pedido de Administrador (UAC). O Port
+Killer é instalado em `C:\Program Files\Port Killer`, com atalho no Menu
+Iniciar e, opcionalmente, na Área de Trabalho. Para atualizar, gere um
+instalador novo e execute-o por cima da versão anterior.
+
+> Sem o Inno Setup, o build entrega só o executável standalone
+> `dist\PortKiller.exe`, que pode ser usado sem instalar.
+
+### 🐧 Linux (x86_64)
+
+**1. Instale os pré-requisitos** (exemplo para Ubuntu/Debian)
+
+```bash
+sudo apt install git python3 python3-tk python3-venv libfuse2
+```
+
+Em versões recentes do Ubuntu o pacote `libfuse2` se chama `libfuse2t64`.
+
+**2. Instale o appimagetool**, que monta o arquivo `.AppImage`:
+
+```bash
+curl -L -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+chmod +x appimagetool
+sudo mv appimagetool /usr/local/bin/
+```
+
+**3. Baixe o código e gere o AppImage**
+
+```bash
+git clone https://github.com/holandale0/port-killer.git
+cd port-killer
+python3 build.py
+```
+
+O AppImage é gerado em `dist/PortKiller-<versão>-x86_64.AppImage`.
+
+**4. Execute**
+
+```bash
+chmod +x dist/PortKiller-*-x86_64.AppImage
+./dist/PortKiller-*-x86_64.AppImage
+```
+
+O AppImage é um arquivo único e não precisa de instalação: mova-o para onde
+preferir (por exemplo, `~/Applications`).
+
+> Sem o appimagetool, o build entrega só o binário standalone `dist/PortKiller`.
+
+### Executar direto pelo código-fonte
+
+Para usar sem gerar instalador (requer Python 3.10+ com tkinter):
 
 ```bash
 git clone https://github.com/holandale0/port-killer.git
@@ -103,24 +164,16 @@ pip install -r requirements.txt
 python port_killer.py
 ```
 
----
+No Linux, use um ambiente virtual (`python3 -m venv .venv && . .venv/bin/activate`)
+antes do `pip install`.
 
-## 🏗️ Gerar os instaladores
-
-Execute o script de build na plataforma desejada. Ele instala o PyInstaller, empacota o executável com Python embutido e gera o instalador nativo automaticamente.
+### Limpar os artefatos de build
 
 ```bash
-python build.py
+python build.py --clean
 ```
 
-Resultado por plataforma:
-
-| Plataforma | Pré-requisito extra | Saída |
-|---|---|---|
-| Windows | [Inno Setup 6.3+](https://jrsoftware.org/isdl.php) | `installer/windows/Output/PortKiller_Setup_1.0.0.exe` |
-| Linux | [appimagetool](https://github.com/AppImage/AppImageKit/releases) | `dist/PortKiller-1.0.0-x86_64.AppImage` |
-
-> Cada plataforma deve ser compilada em sua própria máquina — PyInstaller não suporta cross-compilation.
+Mais detalhes sobre o processo de build em [BUILD.md](BUILD.md).
 
 ---
 
