@@ -195,8 +195,40 @@ class TestSnapshot(unittest.TestCase):
         self.assertEqual(pk.get_port_info(9002, (ports, {})).pids, [666])
 
     def test_udp_without_listen_still_reported(self):
-        ports, _ = self.snapshot_of([FakeConn(9003, 777, psutil.CONN_NONE)])
-        self.assertEqual(pk.get_port_info(9003, (ports, {})).pids, [777])
+        me = os.getpid()            # vivo: sockets de PID morto sao descartados
+        ports, _ = self.snapshot_of([FakeConn(9003, me, psutil.CONN_NONE)])
+        self.assertEqual(pk.get_port_info(9003, (ports, {})).pids, [me])
+
+    def test_time_wait_alone_means_free(self):
+        """Regressao: apos encerrar um dev server, os TIME_WAIT (PID 0) que o
+        navegador deixou mantinham a porta 'EM USO' sem PID para encerrar."""
+        ports, _ = self.snapshot_of([
+            FakeConn(9004, 0, psutil.CONN_TIME_WAIT),
+            FakeConn(9004, 0, psutil.CONN_TIME_WAIT),
+        ])
+        self.assertIsNone(pk.get_port_info(9004, (ports, {})))
+
+    def test_time_wait_does_not_hide_the_listener(self):
+        ports, _ = self.snapshot_of([
+            FakeConn(9005, 0, psutil.CONN_TIME_WAIT),
+            FakeConn(9005, 888, psutil.CONN_LISTEN),
+        ])
+        self.assertEqual(pk.get_port_info(9005, (ports, {})).pids, [888])
+
+    def test_sockets_of_a_dead_process_mean_free(self):
+        """Logo apos o kill, os sockets do processo morto ainda existem."""
+        ports, _ = self.snapshot_of([
+            FakeConn(9006, 991, psutil.CONN_FIN_WAIT2),
+            FakeConn(9007, 992, psutil.CONN_LISTEN),
+        ])
+        real = psutil.pid_exists
+        psutil.pid_exists = lambda pid: False
+        try:
+            self.assertIsNone(pk.get_port_info(9006, (ports, {})))
+            # Listener fica: no Windows um socket herdado sobrevive ao PID.
+            self.assertEqual(pk.get_port_info(9007, (ports, {})).pids, [992])
+        finally:
+            psutil.pid_exists = real
 
     def test_free_port_returns_none(self):
         ports, _ = self.snapshot_of([])

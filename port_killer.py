@@ -166,9 +166,14 @@ def system_snapshot():
     except (psutil.AccessDenied, OSError, RuntimeError):
         return "ACCESS_DENIED", {}
 
+    # TIME_WAIT is the kernel's leftover of a connection already closed: no
+    # process owns it (Windows reports PID 0, Linux None) and it does not stop
+    # a server from listening again. Counting it kept a port "EM USO" with no
+    # PID for up to two minutes after every kill — a dev server that had served
+    # a browser leaves dozens — and a row without a PID offers nothing to kill.
     ports = {}
     for conn in connections:
-        if conn.laddr:
+        if conn.laddr and conn.status != psutil.CONN_TIME_WAIT:
             ports.setdefault(conn.laddr.port, []).append(conn)
 
     # A listening socket is what actually holds a port. Most connections are
@@ -243,7 +248,13 @@ def get_port_info(port, snapshot=None):
     if ports == "ACCESS_DENIED":
         return "ACCESS_DENIED"
 
-    conns = ports.get(port)
+    # The list refreshes right after a kill, while the dead process's sockets
+    # are still being torn down; they would show the port "EM USO" by a PID
+    # that no longer exists. Listeners are kept regardless: on Windows an
+    # inherited socket can outlive the PID the OS still reports for it.
+    conns = [c for c in ports.get(port, ())
+             if c.status == psutil.CONN_LISTEN or not c.pid
+             or psutil.pid_exists(c.pid)]
     if not conns:
         return None
 
