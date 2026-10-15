@@ -1,6 +1,6 @@
 # 🔌 Port Killer
 
-Utilitário desktop para **verificar e encerrar processos** que estão ocupando uma porta de rede — com interface gráfica moderna e suporte a **Windows**, **Linux** e **macOS**.
+Utilitário desktop para **verificar e encerrar processos** que estão ocupando uma porta de rede — com interface gráfica moderna e suporte a **Windows** e **Linux**.
 
 Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção de processos e conexões em tempo real.
 
@@ -11,10 +11,6 @@ Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção d
   &nbsp;
   <a href="https://github.com/holandale0/port-killer/releases/download/1.0.0/PortKiller-1.0.0-x86_64.AppImage">
     <img src="https://img.shields.io/badge/Download-Linux-E95420?style=for-the-badge&logo=linux&logoColor=white" alt="Download Linux"/>
-  </a>
-  &nbsp;
-  <a href="https://github.com/holandale0/port-killer/releases/download/1.0.0/PortKiller-1.0.0.dmg">
-    <img src="https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS"/>
   </a>
   &nbsp;
   <a href="https://github.com/holandale0/port-killer/blob/main/LICENSE">
@@ -40,7 +36,7 @@ Desenvolvido com **Python 3** e **tkinter**, usando **psutil** para inspeção d
 - Status detalhado por porta: `EM USO`, `LIVRE`, `DORMINDO`, `PARADO`, `ZUMBI`, `AGUARD. E/S`
 - Encerra processo individual via botão ou duplo clique na lista
 - **Encerrar todas** — encerra de uma vez todos os processos com status diferente de `LIVRE`
-- Confirmação obrigatória em **todo** encerramento; senha sudo opcional no Linux/macOS (necessária apenas para processos de outro usuário)
+- Confirmação obrigatória em **todo** encerramento; senha sudo opcional no Linux (necessária apenas para processos de outro usuário)
 - Interface **dark mode** com tema [Catppuccin Mocha](https://github.com/catppuccin/catppuccin)
 - Distribuído como executável standalone — **sem precisar instalar Python**
 
@@ -95,7 +91,6 @@ Baixe o instalador do seu sistema na página de [Releases](https://github.com/ho
 |---|---|
 | Windows 10 / 11 (64-bit) | `PortKiller_Setup_1.0.0.exe` |
 | Linux (x86_64) | `PortKiller-1.0.0-x86_64.AppImage` |
-| macOS | `PortKiller-1.0.0.dmg` |
 
 > O instalador já inclui o Python e todas as dependências — nenhuma instalação prévia é necessária.
 
@@ -124,7 +119,6 @@ Resultado por plataforma:
 |---|---|---|
 | Windows | [Inno Setup 6.3+](https://jrsoftware.org/isdl.php) | `installer/windows/Output/PortKiller_Setup_1.0.0.exe` |
 | Linux | [appimagetool](https://github.com/AppImage/AppImageKit/releases) | `dist/PortKiller-1.0.0-x86_64.AppImage` |
-| macOS | `hdiutil` *(já incluso no macOS)* | `dist/PortKiller-1.0.0.dmg` |
 
 > Cada plataforma deve ser compilada em sua própria máquina — PyInstaller não suporta cross-compilation.
 
@@ -137,17 +131,17 @@ python -m unittest discover -s tests -v
 ```
 
 Sem dependências extras. Os testes de interface se pulam sozinhos quando não há
-Tk/display disponível. O CI roda a suíte em Windows, Linux e macOS (Python 3.10
-e 3.13) e compila os instaladores das três plataformas a cada push.
+Tk/display disponível. O CI roda a suíte (Python 3.10 e 3.13) e compila os
+instaladores a cada push.
 
 ---
 
 ## ⚠️ Permissões
 
-Em alguns sistemas pode ser necessário executar como **Administrador** (Windows) ou com **sudo** (Linux/macOS) para visualizar processos de sistema ou encerrar processos privilegiados.
+Em alguns sistemas pode ser necessário executar como **Administrador** (Windows) ou com **sudo** (Linux) para visualizar processos de sistema ou encerrar processos privilegiados.
 
 - **Windows** — ao encontrar um processo sem permissão, o app oferece reabrir a si mesmo como Administrador (UAC).
-- **Linux/macOS** — o dialog de confirmação tem um campo de senha sudo **opcional**, usado apenas se o encerramento normal for negado.
+- **Linux** — o dialog de confirmação tem um campo de senha sudo **opcional**, usado apenas se o encerramento normal for negado.
 
 Processos cujo dono não pode ser lido aparecem como `Desconhecido` — nunca como `Aplicação`.
 
@@ -164,16 +158,15 @@ Processos cujo dono não pode ser lido aparecem como `Desconhecido` — nunca co
 - [x] Status detalhado: EM USO, LIVRE, DORMINDO, PARADO, ZUMBI etc.
 - [x] Encerrar processo por duplo clique na lista
 - [x] Encerrar todas as portas com status diferente de LIVRE
-- [x] Dialog de confirmação com senha sudo opcional (Linux/macOS)
+- [x] Dialog de confirmação com senha sudo opcional (Linux)
 - [x] Encerramento da árvore de processos (pai + descendentes)
 - [x] Detecção de múltiplos processos na mesma porta (SO_REUSEPORT, dual-stack)
 - [x] Limpar lista pinada
 - [x] Interface dark mode (Catppuccin Mocha)
 - [x] Instalador Windows com wizard (Inno Setup)
 - [x] AppImage para Linux
-- [x] DMG para macOS
 - [x] Script de build automatizado (`build.py`)
-- [x] Ícones próprios (`.png`, `.ico`, `.icns`) em todas as plataformas
+- [x] Ícones próprios (`.png`, `.ico`) no Windows e no Linux
 - [x] Relaunch com elevação UAC no Windows
 - [x] Suíte de testes (`python -m unittest discover -s tests`)
-- [x] CI em Windows, Linux e macOS (GitHub Actions)
+- [x] CI com GitHub Actions
